@@ -198,7 +198,7 @@ function [p_jump_distribution] = FindJumpDistribution(isYES2)
     if isYES2; p_jump_distribution(1) = 0; end
 end
 
-function [ni] = FindNeighborIndex(ci, delta, ny) % return neighbor index
+function [ni] = FindNeighborIndex(ci, ny) % return neighbor index
     
     global v;
     
