@@ -2,7 +2,7 @@ function [t, sy1, py1, sy2, iy2, py2] = simulate_activity(ny1, ny2, num_enzymes,
 
     % global parameters, substrates on rows, enzymes on columns
     global Kon; global Koff; global Kcat; global timeStep;
-    global ne; global YES; global YES2; global enzymes;
+    global ne; global YES1; global YES2; global enzymes;
     if numel(kon) == 1; Kon = zeros(1,1,2); Kon(1,1,:) = kon;
     else; Kon = kon; end
     if numel(koff) == 1; Koff = zeros(1,1,2); Koff(1,1,:) = koff;
@@ -13,7 +13,8 @@ function [t, sy1, py1, sy2, iy2, py2] = simulate_activity(ny1, ny2, num_enzymes,
     ne = num_enzymes; % number of enzymes
     
     % calculate avg separation
-    global v;
+    global v; global nn;
+    nn = min(valency-1,8); % consider nn nearest neighbors (4 cardinal + 4 diagonal)
     v = valency;
     d = particle_diameter;
     global yes2_separation_dist;
@@ -21,6 +22,10 @@ function [t, sy1, py1, sy2, iy2, py2] = simulate_activity(ny1, ny2, num_enzymes,
     surface_area_per_sensor = pi * d^2 / v;
     global avg_sensor_separation_dist;
     avg_sensor_separation_dist = sqrt(surface_area_per_sensor);
+    
+    % calculate graph and neighbors
+    global graph_matrix;
+    [graph_matrix] = RegularGraph(v,nn);
     
     % initialize vectors
     enzymes = cell(numel(ne), 1);
@@ -66,7 +71,7 @@ function [t, sy1, py1, sy2, iy2, py2] = simulate_activity(ny1, ny2, num_enzymes,
             max_progress = max(max_progress, current_progress);
 
             % stop the simulation if all substrates are cleaved
-            seconds_post_ss = 5;
+            seconds_post_ss = 1;
             last_i = round(seconds_post_ss / timeStep);
             if last_i >= numel(py1{sub_ind}); continue; end
             if all(py1{sub_ind}(end-last_i:end) == ny1(sub_ind)) && all(py2{sub_ind}(end-last_i:end) == ny2(sub_ind)); finish = true; end
@@ -125,7 +130,7 @@ function vec = Process(vec, si, ci, y2i)
     
     % declare global variables from main thread
     global Kon; global Koff; global Kcat; global timeStep;
-    global YES; global YES2; global enzymes; global ne;
+    global enzymes; global ne;
     
     % process possible events on this substrate
     if ~isnan(vec(1,1,task)) % if an action is in progress
@@ -137,17 +142,11 @@ function vec = Process(vec, si, ci, y2i)
                 boundEnzyme = find(enzymes{ei}==1, 1, 'first'); % find bound enzyme
                 enzymes{ei}(boundEnzyme) = 0; % unbind enzyme
                 
-                % handle jumping
+                % handle jumping to neighbor, or adjacent substrate on same sensor
                 p_jump_distribution = FindJumpDistribution(y2i > 0); % find probability of jumping to each neighbor
-                rand_jump = find(rand < p_jump_distribution, 1, 'first'); % index of first encountered neighbor
-                
-                
-                % if other substrate is unbound AND other substrate has no task in progress
-                if YES2{si}(ci,3-y2i,state) == 0 && isnan(YES2{si}(ci,3-y2i,task))
-                    enzymes{ei}(boundEnzyme) = 1; % bind enzyme
-                    YES2{si}(ci,3-y2i,task) = ei; % task = binding by enzyme index
-                    YES2{si}(ci,3-y2i,time) = exprnd(1/Kon(si, ei, y2i)); % time to bind
-                end
+                rand_jump = find(rand < p_jump_distribution, 1, 'first') - 1; % index of first encountered neighbor
+                ni = FindNeighborIndex(ci, rand_jump);
+                UpdateNeighborIfFree(y2i, si, ci, ni, ei, boundEnzyme);
                 
             end
             % state becomes the task, reset task and time
@@ -192,31 +191,79 @@ end
 function [p_jump_distribution] = FindJumpDistribution(isYES2)
     global yes2_separation_dist;
     global avg_sensor_separation_dist;
-    nn = 8; % consider nn nearest neighbors (4 cardinal + 4 diagonal)
-    p_jump_distribution = [yes2_separation_dist, repmat(avg_sensor_separation_dist, 1, nn)];
+    global nn;
+    p_jump_distribution = [yes2_separation_dist, repmat(avg_sensor_separation_dist, 1, nn)].^-2; % distance as inverse squared
     p_jump_distribution = cumsum(p_jump_distribution / sum(p_jump_distribution));
-    if isYES2; p_jump_distribution(1) = 0; end
+    if ~isYES2; p_jump_distribution(1) = 0; end
 end
 
-function [ni] = FindNeighborIndex(ci, delta, ny) % return neighbor index
+function [ni] = FindNeighborIndex(ci, index) % return neighbor index
     
-    global v;
+    global v; global graph_matrix;
     
+    if index == 0; ni = ci; return; end
     
+    particle_index = mod(ci, v);
+    if particle_index == 0; particle_index = v; end
+    
+    neighbor = graph_matrix(particle_index, index);
+
+    ni = v * floor(ci/(v+1)) + neighbor;
 
 end
 
-function [isFree] = IsNeighborFree(isYES2, ci, neighbor)
+function UpdateNeighborIfFree(y2i, si, ci, ni, ei, boundEnzyme)
 
-    global YES; global YES2;
+    if isempty(ni); return; end
     
-    if isYES2
+    global YES1; global YES2; global enzymes; global Kon;
+    
+    % make sure ni is within bounds (edge case for if number of substrates
+    % is not divisible by valency
+    if y2i > 0; ny = length(YES2{si});
+    else; ny = length(YES1{si}); end
+    if ni > ny; ni = ny; end
+    
+    % what each index means in the 3rd dimension
+    state = 1; task = 2; time = 3;
+    
+    if y2i > 0 && ni == ci % is YES2 and we are jumping to other substrate on same YES2
         
+        if YES2{si}(ci,3-y2i,state) == 0 && isnan(YES2{si}(ci,3-y2i,task))
+            
+            enzymes{ei}(boundEnzyme) = 1; % bind enzyme
+            YES2{si}(ci,3-y2i,task) = ei; % task = binding by enzyme index
+            YES2{si}(ci,3-y2i,time) = exprnd(1/Kon(si, ei, 3-y2i)); % time to bind
+            
+        end
         
+    elseif y2i > 0 && ni ~= ci % is YES2 and we are jumping to a neighbor
         
-    else
+        if YES2{si}(ni,3-y2i,state) == 0 && isnan(YES2{si}(ni,3-y2i,task)) % check both substrates on neighbor
+            
+            enzymes{ei}(boundEnzyme) = 1; % bind enzyme
+            YES2{si}(ni,3-y2i,task) = ei; % task = binding by enzyme index
+            YES2{si}(ni,3-y2i,time) = exprnd(1/Kon(si, ei, 3-y2i)); % time to bind
+            
+        end
         
+        if YES2{si}(ni,y2i,state) == 0 && isnan(YES2{si}(ni,y2i,task)) % check both substrates on neighbor
+            
+            enzymes{ei}(boundEnzyme) = 1; % bind enzyme
+            YES2{si}(ni,y2i,task) = ei; % task = binding by enzyme index
+            YES2{si}(ni,y2i,time) = exprnd(1/Kon(si, ei, y2i)); % time to bind
+            
+        end
         
+    else % is YES
+
+        if YES1{si}(ni,1,state) == 0 && isnan(YES1{si}(ni,1,task))
+            
+            enzymes{ei}(boundEnzyme) = 1; % bind enzyme
+            YES1{si}(ni,1,task) = ei; % task = binding by enzyme index
+            YES1{si}(ni,1,time) = exprnd(1/Kon(si, ei, 1)); % time to bind
+            
+        end
         
     end
 

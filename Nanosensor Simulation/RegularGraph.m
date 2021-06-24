@@ -1,20 +1,14 @@
-function [G, graph_matrix] = GenerateGraph(num_nodes, num_edges_per_node)
+function [graph_matrix] = RegularGraph(n, k)
     
-    % generates a graph where each node has num_edges_per_node
-    % N is size num_nodes x num_edges_per_node
+    graph_matrix = zeros(n, k);
     
-    G = graph;
-    G = addnode(G, num_nodes);
-    
-    graph_matrix = zeros(num_nodes, num_edges_per_node);
-    
-    for col = 1:num_edges_per_node
+    for col = 1:k
         
-        for row = 1:num_nodes
+        for row = 1:n
             
             if graph_matrix(row, col) ~= 0; continue; end % if we already have this value, continue
 
-            for value = 1:num_nodes
+            for value = 1:n
 
                 if value == row; continue; end % if value is same as row, continue
                 
@@ -28,8 +22,6 @@ function [G, graph_matrix] = GenerateGraph(num_nodes, num_edges_per_node)
                 first_free_col_other = find(graph_matrix(value,:) == 0, 1, 'first');
                 graph_matrix(value, first_free_col_other) = row;
                 
-                G = addedge(G, row, value);
-                
                 break; % once we found a value for this spot, break and move onto next row
                 
             end
@@ -38,9 +30,5 @@ function [G, graph_matrix] = GenerateGraph(num_nodes, num_edges_per_node)
         
     end
     
-    close all;
-    plot(G);
-    
-    accuracy = sum(degree(G) == num_edges_per_node) / num_nodes
     
 end
