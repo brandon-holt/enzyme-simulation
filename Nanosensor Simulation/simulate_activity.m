@@ -189,6 +189,7 @@ function vec = Process(vec, si, ci, y2i)
 end
 
 function [p_jump_distribution] = FindJumpDistribution(isYES2)
+    % update calculate as grid
     global yes2_separation_dist;
     global avg_sensor_separation_dist;
     global nn;
